@@ -1,12 +1,14 @@
 package com.narxoz.rpg.battle;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
 public final class BattleEngine {
     private static BattleEngine instance;
-    private Random random = new Random(1L);
+    private static final long DEFAULT_SEED = 1L;
+    private static final int MAX_ROUNDS = 10_000;
+
+    private Random random = new Random(DEFAULT_SEED);
 
     private BattleEngine() {
     }
@@ -24,104 +26,131 @@ public final class BattleEngine {
     }
 
     public void reset() {
-        this.random = new Random(1L);
+        // Resets any engine state back to defaults.
+        this.random = new Random(DEFAULT_SEED);
     }
 
     public EncounterResult runEncounter(List<Combatant> teamA, List<Combatant> teamB) {
+        EncounterResult result = new EncounterResult();
+
         if (teamA == null || teamB == null) {
-            throw new IllegalArgumentException("Teams must not be null");
+            result.setWinner("No contest");
+            result.setRounds(0);
+            result.addLog("Encounter failed: one of the teams is null.");
+            return result;
         }
 
-        List<Combatant> a = new ArrayList<>();
+        // Work with copies so the caller's lists are not mutated.
+        List<Combatant> a = new java.util.ArrayList<>();
         for (Combatant c : teamA) {
-            if (c != null) {
+            if (c != null && c.isAlive()) {
                 a.add(c);
             }
         }
 
-        List<Combatant> b = new ArrayList<>();
+        List<Combatant> b = new java.util.ArrayList<>();
         for (Combatant c : teamB) {
-            if (c != null) {
+            if (c != null && c.isAlive()) {
                 b.add(c);
             }
         }
 
-        a.removeIf(c -> !c.isAlive());
-        b.removeIf(c -> !c.isAlive());
+        result.addLog("Encounter starts: Team A (" + a.size() + ") vs Team B (" + b.size() + ")");
 
-        EncounterResult result = new EncounterResult();
-
+        // Handle empty team edge cases.
         if (a.isEmpty() && b.isEmpty()) {
             result.setWinner("Draw");
             result.setRounds(0);
-            result.addLog("Both teams have no living combatants");
+            result.addLog("Both teams are empty or already defeated.");
             return result;
         }
-
         if (a.isEmpty()) {
             result.setWinner("Team B");
             result.setRounds(0);
-            result.addLog("Team A has no living combatants");
+            result.addLog("Team A has no living combatants.");
             return result;
         }
-
         if (b.isEmpty()) {
             result.setWinner("Team A");
             result.setRounds(0);
-            result.addLog("Team B has no living combatants");
+            result.addLog("Team B has no living combatants.");
             return result;
         }
 
         int rounds = 0;
-
-        while (!a.isEmpty() && !b.isEmpty()) {
+        while (!a.isEmpty() && !b.isEmpty() && rounds < MAX_ROUNDS) {
             rounds++;
+            result.addLog("\n--- Round " + rounds + " ---");
 
-            attackInOrder(a, b, result, rounds, "A", "B");
+            doAttackPhase(a, b, "A", "B", result);
             if (b.isEmpty()) {
                 break;
             }
 
-            attackInOrder(b, a, result, rounds, "B", "A");
+            doAttackPhase(b, a, "B", "A", result);
         }
 
         result.setRounds(rounds);
-        result.setWinner(a.isEmpty() ? "Team B" : "Team A");
+        if (rounds >= MAX_ROUNDS) {
+            result.setWinner("Draw");
+            result.addLog("Battle stopped: reached max rounds (" + MAX_ROUNDS + ").");
+            return result;
+        }
+
+        String winner = a.isEmpty() ? "Team B" : "Team A";
+        result.setWinner(winner);
+        result.addLog("\nBattle ends. Winner: " + winner);
         return result;
     }
 
-    private void attackInOrder(List<Combatant> attackers, List<Combatant> defenders, EncounterResult result, int round, String attackerTeam, String defenderTeam) {
-        int i = 0;
-        while (i < attackers.size() && !defenders.isEmpty()) {
-            Combatant attacker = attackers.get(i);
+    private void doAttackPhase(
+            List<Combatant> attackers,
+            List<Combatant> defenders,
+            String attackersLabel,
+            String defendersLabel,
+            EncounterResult result
+    ) {
+        // Attackers act in list order.
+        int attackIndex = 0;
+        for (Combatant attacker : attackers) {
+            if (defenders.isEmpty()) {
+                return;
+            }
             if (attacker == null || !attacker.isAlive()) {
-                attackers.remove(i);
                 continue;
             }
 
-            int targetIndex = i % defenders.size();
+            // Target selection: in-order (stable and easy to reason about).
+            int targetIndex = attackIndex % defenders.size();
             Combatant target = defenders.get(targetIndex);
 
-            int damage = Math.max(0, attacker.getAttackPower());
-            boolean crit = random.nextInt(100) < 20;
-            if (crit) {
-                damage *= 2;
-            }
+            int damage = computeDamage(attacker.getAttackPower());
+            result.addLog("Team " + attackersLabel + ": " + attacker.getName() + " hits " + target.getName()
+                    + " for " + damage + " dmg");
 
             target.takeDamage(damage);
-
-            String line = "Round " + round + ": " + attackerTeam + "[" + attacker.getName() + "] hits " + defenderTeam + "[" + target.getName() + "] for " + damage + (crit ? " (CRIT)" : "");
-            result.addLog(line);
-
             if (!target.isAlive()) {
-                result.addLog(defenderTeam + "[" + target.getName() + "] is defeated");
                 defenders.remove(targetIndex);
+                result.addLog("Team " + defendersLabel + ": " + target.getName() + " is defeated!");
             }
 
-            i++;
+            attackIndex++;
         }
+    }
 
-        attackers.removeIf(c -> c == null || !c.isAlive());
-        defenders.removeIf(c -> c == null || !c.isAlive());
+    private int computeDamage(int basePower) {
+        // Small variation + occasional critical hit (2x).
+        int base = Math.max(1, basePower);
+
+        // +/- up to 20% variation
+        int swing = Math.max(1, (int) Math.round(base * 0.2));
+        int delta = random.nextInt(swing * 2 + 1) - swing;
+        int damage = Math.max(1, base + delta);
+
+        boolean crit = random.nextDouble() < 0.15;
+        if (crit) {
+            damage *= 2;
+        }
+        return damage;
     }
 }

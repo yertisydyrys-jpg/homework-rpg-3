@@ -29,3 +29,19 @@ public final class BattleEngine {
 - Public constructor
 - `getInstance()` returning a new object each time
 - Storing game state in multiple places
+
+@startuml
+class BattleEngine {
+- {static} instance : BattleEngine
+- random : Random
+- {static} DEFAULT_SEED : long
+- {static} MAX_ROUNDS : int
+
+- BattleEngine()
+
++ {static} getInstance() : BattleEngine
++ setRandomSeed(seed: long) : BattleEngine
++ runEncounter(teamA: List<Combatant>, teamB: List<Combatant>) : EncounterResult
++ reset() : void
+  }
+  @enduml
